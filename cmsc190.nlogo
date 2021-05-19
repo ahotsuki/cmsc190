@@ -1,25 +1,98 @@
 ;globals
-globals [cell-dimension]
+globals [cell-dimension time]
+patches-own [ pid ]
+turtles-own [current-cell]
 
 to setup
+  ;reset everything
+  print "begin"
   clear-all
   reset-ticks
   ask patches [
     set pcolor white
   ]
+  set time 0
+
   set cell-dimension ((max-pxcor + 1) / cell)
-  draw-cell-borders
+
   draw-borders
+  draw-cell-borders
+
+  set-cells-id
+
+  create-turtles population [
+    set color yellow
+    setxy random-xcor random-ycor
+    set current-cell ([pid] of patch-here)
+  ]
 end
 
 to go
+  let movement (1 / transition)
 
+  ifelse time < transition
+  [
+    ask turtles [
+      forward movement
+      set current-cell (cell-has-changed current-cell ([pid] of patch-here))
+    ]
+    set time (time + 1)
+  ][
+    set time 1
+    ask turtles [
+      set heading (heading + (45 - random 90))
+      forward movement
+      set current-cell (cell-has-changed current-cell ([pid] of patch-here))
+    ]
+    tick
+  ]
+end
+
+to-report cell-has-changed [c n]
+  if c != n
+  [show (word "changed! from " c " to " n)]
+  report n
 end
 
 
 
+;setting cell ids
 
+to set-cells-id
+  let cell-id 1
+  let x 0
+  let y (cell - 1)
+  repeat cell [
+    repeat cell [
+      set-cell-id (cell-dimension * (cell - cell + x)) (cell-dimension * (cell - cell + y)) cell-id
+      set x (x + 1)
+      set cell-id (cell-id + 1)
+    ]
+    set x 0
+    set y (y - 1)
+  ]
+end
 
+to set-cell-id [x y id]
+  let row 0
+  let col 0
+  repeat cell-dimension [
+    repeat cell-dimension [
+      ask patch (col + x) (row + y) [
+        ifelse (id mod 2) = 0
+        [
+          set pcolor green
+        ][
+          set pcolor blue
+        ]
+        set pid id
+      ]
+      set col (col + 1)
+    ]
+    set col 0
+    set row (row + 1)
+  ]
+end
 
 
 
@@ -33,7 +106,9 @@ to draw-borders
   ask patches [
     sprout 1 [
       set color grey
-      set heading 45
+      set heading 90
+      forward 0.5
+      set heading 0
       forward 0.5
       pen-down
       let angle 360
@@ -55,8 +130,10 @@ to draw-cell-borders
       ask patch (cell-dimension - 1 + (row * cell-dimension)) (cell-dimension - 1 + (column * cell-dimension)) [
         sprout 1 [
           set color red
-          set heading 45
+          set heading 90
           forward 0.55
+          set heading 0
+          forward 0.5
           pen-down
           let angle 360
           repeat 4 [
@@ -152,6 +229,32 @@ cell
 1
 10
 3.0
+1
+1
+NIL
+HORIZONTAL
+
+INPUTBOX
+26
+115
+108
+175
+population
+1.0
+1
+0
+Number
+
+SLIDER
+128
+120
+300
+153
+transition
+transition
+1
+10
+10.0
 1
 1
 NIL
