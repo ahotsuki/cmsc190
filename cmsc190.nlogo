@@ -3,6 +3,12 @@ globals [cell-dimension time]
 patches-own [ pid ]
 turtles-own [current-cell]
 
+
+
+
+
+
+
 to setup
   ;reset everything
   print "begin"
@@ -33,26 +39,93 @@ to go
   ifelse time < transition
   [
     ask turtles [
-      forward movement
-      set current-cell (cell-has-changed current-cell ([pid] of patch-here))
+      forward-without-collision
+      ;set current-cell (cell-has-changed current-cell ([pid] of patch-here))
     ]
     set time (time + 1)
   ][
     set time 1
     ask turtles [
       set heading (heading + (45 - random 90))
-      forward movement
-      set current-cell (cell-has-changed current-cell ([pid] of patch-here))
+      out-of-border
+
+      forward-without-collision
+      ;set current-cell (cell-has-changed current-cell ([pid] of patch-here))
     ]
     tick
   ]
 end
+
+
+
+
+
+
+
+
+
+;location detection
 
 to-report cell-has-changed [c n]
   if c != n
   [show (word "changed! from " c " to " n)]
   report n
 end
+
+
+
+
+
+
+
+
+
+
+
+
+
+;collision detection
+
+to out-of-border
+  let xh ([pxcor] of patch-here)
+  let xa ([pxcor] of patch-ahead 1)
+  let yh ([pycor] of patch-here)
+  let ya ([pycor] of patch-ahead 1)
+  if (xh = 0) and (xa = max-pxcor) [set heading (0 - heading)]
+  if (xh = max-pxcor) and (xa = 0) [set heading (0 - heading)]
+  if (yh = 0) and (ya = max-pycor) [set heading (180 - heading)]
+  if (yh = max-pycor) and (ya = 0) [set heading (180 - heading)]
+end
+
+to forward-without-collision
+  let pfront (patch-ahead 1)
+  let phere (patch-here)
+  let xh ([pxcor] of phere)
+  let yh ([pycor] of phere)
+  let xf ([pxcor] of pfront)
+  let yf ([pycor] of pfront)
+  ifelse ([pcolor] of pfront) = black
+  [
+    ifelse ((xh - xf) != 0) and ((yh - yf) != 0)
+    [
+      set heading (0 - heading)
+      if ([pcolor] of patch-ahead 1) = black [ set heading (180 - heading) ]
+    ]
+    [
+      if ((xh - xf) = 0) [ set heading (180 - heading) ]
+      if ((yh - yf) = 0) [ set heading (0 - heading) ]
+    ]
+  ]
+  [ forward 0.1 ]
+end
+
+
+
+
+
+
+
+
 
 
 
@@ -93,6 +166,10 @@ to set-cell-id [x y id]
     set row (row + 1)
   ]
 end
+
+
+
+
 
 
 
