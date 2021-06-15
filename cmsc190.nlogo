@@ -1,77 +1,306 @@
-;globals
-globals [cell-dimension time]
+;globals -----------------------------------------------------------------------------------
+globals [cell-dimension collided pen show-turtles show-links]
+breed [humans human]
+breed [mecagents mecagent]
+breed [supermanagers supermanager]
 patches-own [ pid ]
-turtles-own [current-cell]
+humans-own [current-cell infection immunity cell-list abnormalFirstDetected TI TN UI speed]
+mecagents-own [current-cell TI TN UI]
+supermanagers-own [current-time TI TN UI SC RANK]
+;-------------------------------------------------------------------------------------------
 
 
 
 
-
-
+;basic setup and simulation loop ------------------------------------------------------------
 
 to setup
   ;reset everything
-  print "begin"
   clear-all
   reset-ticks
   ask patches [
     set pcolor white
   ]
-  set time 0
+  set collided 0
+  set pen false
+  set show-turtles true
+  set show-links false
 
   set cell-dimension ((max-pxcor + 1) / cell)
 
-  draw-borders
-  draw-cell-borders
+  DRAW-CELL-BORDERS
+  DRAW-INFECTION
 
-  set-cells-id
+  SET-CELLS-ID
 
-  create-turtles population [
-    set color yellow
-    setxy random-xcor random-ycor
-    set current-cell ([pid] of patch-here)
-  ]
+  DRAW-CITY
+
+  MEC-INIT
+  SUPERMANAGER-INIT
+
+  POPULATE
+
+  output-print "DONE SETTING UP!"
 end
 
 to go
-  let movement (1 / transition)
+  clear-output
+  tick
+  ask humans [ask my-out-links [die]]
+  ask humans [
+    set heading (heading + (45 - random 90))
 
-  ifelse time < transition
+    OUT-OF-BORDER
+    FORWARD-WITHOUT-COLLISION
+    PERSONAL-MONITORING-AGENT
+
+    if (infection > 0) and (infection <= immunity) [set infection (infection + 1)]
+  ]
+  update-plots
+;  tick
+end
+
+;-------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+;agent codes -----------------------------------------------------------------------------------
+
+to PERSONAL-MONITORING-AGENT
+;  output-print (word "pma called at " ticks)
+  let isNormal DETECT-INFECTION
+  let cellHasChanged (CELL-HAS-CHANGED ([pid] of patch-here))
+
+  ;--------- A ----------
+  if cellHasChanged
   [
-    ask turtles [
-      forward-without-collision
-      ;set current-cell (cell-has-changed current-cell ([pid] of patch-here))
-    ]
-    set time (time + 1)
-  ][
-    set time 1
-    ask turtles [
-      set heading (heading + (45 - random 90))
-      out-of-border
+    set current-cell ([pid] of patch-here)
+    set cell-list ADD-CELL-TO-LIST
+  ]
 
-      forward-without-collision
-      ;set current-cell (cell-has-changed current-cell ([pid] of patch-here))
+  ;--------- B ----------
+  if cellHasChanged and isNormal
+  [
+    set TI (replace-item (current-cell - 1) TI 0)
+    set TN (replace-item (current-cell - 1) TN 1)
+    set UI (replace-item (current-cell - 1) UI 0)
+  ]
+
+  ;--------- C ----------
+  if (not isNormal) and (abnormalFirstDetected = 0)
+  [
+    if pen [ask patch-here [set pcolor yellow]]
+    set abnormalFirstDetected ticks
+
+    set TI (replace-item (current-cell - 1) TI 1)
+    set TN (replace-item (current-cell - 1) TN 0)
+    set UI (replace-item (current-cell - 1) UI 0)
+
+    let index 1
+    repeat (cell * cell)
+    [
+      if not (member? index cell-list) [
+        set UI (replace-item (index - 1) UI 1)
+      ]
+      set index (index + 1)
     ]
-    tick
+
+    foreach cell-list [ cell-num ->
+      if cell-num != current-cell
+      [
+        set TI (replace-item (cell-num - 1) TI 1)
+        set TN (replace-item (cell-num - 1) TN 0) ;sets TN at Ct by -1 (minus 1)
+      ]
+    ]
+
+    if not cellHasChanged
+    [
+      set TN (replace-item (current-cell - 1) TN 0) ;sets TN at current-cell by -1 (minus 1)
+    ]
+
+  ]
+
+  ;sending value to mec
+  MEC-AGENT current-cell self
+end
+
+to MEC-AGENT [id agent]
+;  output-print (word "mec" id " called")
+  let Mk (mecagents with [current-cell = id])
+  ask Mk [
+    create-link-from agent [if not show-links [hide-link]]
+    let temp-ti INITIALIZE-LIST cell 0 true
+    let temp-tn INITIALIZE-LIST cell 0 true
+    let temp-ui INITIALIZE-LIST cell 0 true
+
+    ;--------- A ---------
+    ask in-link-neighbors
+    [
+      set temp-ti (map + temp-ti TI)
+      set temp-tn (map + temp-tn TN)
+      set temp-ui (map + temp-ui UI)
+    ]
+
+    set TI temp-ti
+    set TN temp-tn
+    set UI temp-ui
+
+    ;--------- B ---------
+    ;sending value to sm
+    SUPERMANAGER-AGENT self
   ]
 end
 
+to SUPERMANAGER-AGENT [agent]
+;  output-print (word "sm called")
+  ask supermanagers [
+    ;resets the list of mecagents that called supermanager at time t
+    if current-time != ticks
+    [
+      ask my-in-links [die]
+      set current-time ticks
+    ]
 
+    ;adds to the list of mecagents at time t
+    create-link-from agent [if not show-links [hide-link]]
 
+    let temp-ti INITIALIZE-LIST cell 0 true
+    let temp-tn INITIALIZE-LIST cell 0 true
+    let temp-ui INITIALIZE-LIST cell 0 true
 
+    ;---------- A -----------
+    ask in-link-neighbors
+    [
+      set temp-ti (map + temp-ti TI)
+      set temp-tn (map + temp-tn TN)
+      set temp-ui (map + temp-ui UI)
+    ]
+    set TI temp-ti
+    set TN temp-tn
+    set UI temp-ui
 
+    ;---------- B ------------
+    ;computes sc
+    let temp-sc INITIALIZE-LIST cell 0 true
+    let index 0
+    repeat (length temp-sc)
+    [
+      let denom ((item index TI) + (item index TN) + (item index UI))
+      if denom > 0
+      [
+        set temp-sc (replace-item index temp-sc ((item index TI) / denom))
+      ]
+     set index (index + 1)
+    ]
+    set SC temp-sc
 
-
-
-
-;location detection
-
-to-report cell-has-changed [c n]
-  if c != n
-  [show (word "changed! from " c " to " n)]
-  report n
+    ;RANKS THE SUSPICIOUS CELLS
+    set RANK (RANK-LIST SC)
+  ]
 end
 
+;-------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+;utility functions -------------------------------------------------------------------------------
+
+to-report ADD-CELL-TO-LIST
+  let tempList cell-list
+  let entry ([pid] of patch-here)
+  if member? entry tempList [report tempList]
+  set tempList (lput entry tempList)
+  report (sort tempList)
+end
+
+to-report INITIALIZE-LIST [listSize listValue condition]
+  if condition [set listSIze (listSize * listSize)]
+  let tempList []
+  repeat (listSize)
+  [set tempList (lput listValue tempList)]
+  report tempList
+end
+
+to-report RANK-LIST [list-input]
+  let result list-input
+  let ranks (sort-by > (remove-duplicates list-input))
+  let index 0
+  repeat (length list-input)
+  [
+    let list-item (item index list-input)
+    if not (list-item = 0)
+    [
+      let item-rank ((position list-item ranks) + 1)
+      set result (replace-item index result item-rank)
+    ]
+    set index (index + 1)
+  ]
+  report result
+end
+
+to MEC-INIT
+  let c-index ((ceiling (cell-dimension / 2)) - 1)
+  let x 0
+  let y 0
+  repeat cell
+  [
+    repeat cell
+    [
+      ask patch ((x * cell-dimension) + c-index) ((y * cell-dimension) + c-index)
+      [
+        sprout-mecagents 1
+        [
+          set shape "house"
+          set size 0.5
+          set color blue
+          set current-cell ([pid] of patch-here)
+        ]
+      ]
+      set x (x + 1)
+    ]
+    set x 0
+    set y (y + 1)
+  ]
+end
+
+to SUPERMANAGER-INIT
+  let center (floor (max-pxcor / 2))
+  let index (floor (cell-dimension / 2))
+  if (cell mod 2) = 0
+  [set index 0]
+  ask patch center center
+  [
+    ask patch-at 0 index
+    [
+      sprout-supermanagers 1
+      [
+        set shape "star"
+        set color cyan
+        if (index = 0) or (cell-dimension mod 2 = 0) [
+          set heading 90
+          forward 0.5
+        ]
+        set current-time ticks
+      ]
+    ]
+  ]
+end
+
+;-------------------------------------------------------------------------------------------
 
 
 
@@ -82,11 +311,48 @@ end
 
 
 
+;population creation ----------------------------------------------------------------------------------------
+
+to POPULATE
+  create-humans population [
+    set color green
+    set infection 0
+    set immunity (random (immune-system + 1))
+    set cell-list []
+    set TI INITIALIZE-LIST cell 0 true
+    set TN INITIALIZE-LIST cell 0 true
+    set UI INITIALIZE-LIST cell 0 true
+    set speed 1
+
+    PREVENT-BLOCK-SPAWN
+
+    PERSONAL-MONITORING-AGENT
+
+    SHOW-COLLIDED
+  ]
+end
+
+to PREVENT-BLOCK-SPAWN
+  setxy random-xcor random-ycor
+  if ([pcolor] of patch-here) = black
+  [
+    PREVENT-BLOCK-SPAWN
+  ]
+end
+
+;-------------------------------------------------------------------------------------------
 
 
-;collision detection
 
-to out-of-border
+
+
+
+
+
+
+;collision detection -------------------------------------------------------------------------------------------
+
+to OUT-OF-BORDER
   let xh ([pxcor] of patch-here)
   let xa ([pxcor] of patch-ahead 1)
   let yh ([pycor] of patch-here)
@@ -97,7 +363,7 @@ to out-of-border
   if (yh = max-pycor) and (ya = 0) [set heading (180 - heading)]
 end
 
-to forward-without-collision
+to FORWARD-WITHOUT-COLLISION
   let pfront (patch-ahead 1)
   let phere (patch-here)
   let xh ([pxcor] of phere)
@@ -116,9 +382,31 @@ to forward-without-collision
       if ((yh - yf) = 0) [ set heading (0 - heading) ]
     ]
   ]
-  [ forward 0.1 ]
+  [ forward speed ]
+  SHOW-COLLIDED
 end
 
+to-report DETECT-INFECTION
+  if (infection = 0) and (([pcolor] of patch-here) = red)
+  [set infection 1]
+  if (infection = immunity + 1)
+  [
+    if color = green [set color yellow]
+    report false
+  ]
+  report true
+end
+
+to-report CELL-HAS-CHANGED [next]
+  if current-cell != next
+  [
+;    ask my-out-links [die]
+    report true
+  ]
+  report false
+end
+
+;-------------------------------------------------------------------------------------------
 
 
 
@@ -129,15 +417,15 @@ end
 
 
 
-;setting cell ids
+;setting cell ids ---------------------------------------------------------------------------------------
 
-to set-cells-id
+to SET-CELLS-ID
   let cell-id 1
   let x 0
   let y (cell - 1)
   repeat cell [
     repeat cell [
-      set-cell-id (cell-dimension * (cell - cell + x)) (cell-dimension * (cell - cell + y)) cell-id
+      SET-PATCH-ID (cell-dimension * (cell - cell + x)) (cell-dimension * (cell - cell + y)) cell-id
       set x (x + 1)
       set cell-id (cell-id + 1)
     ]
@@ -146,18 +434,12 @@ to set-cells-id
   ]
 end
 
-to set-cell-id [x y id]
+to SET-PATCH-ID [x y id]
   let row 0
   let col 0
   repeat cell-dimension [
     repeat cell-dimension [
       ask patch (col + x) (row + y) [
-        ifelse (id mod 2) = 0
-        [
-          set pcolor green
-        ][
-          set pcolor blue
-        ]
         set pid id
       ]
       set col (col + 1)
@@ -167,6 +449,7 @@ to set-cell-id [x y id]
   ]
 end
 
+;-------------------------------------------------------------------------------------------
 
 
 
@@ -177,9 +460,10 @@ end
 
 
 
-;Drawing borders
 
-to draw-borders
+;Drawing borders -----------------------------------------------------------------------------------
+
+to DRAW-BORDERS
   ask patches [
     sprout 1 [
       set color grey
@@ -199,28 +483,21 @@ to draw-borders
   ]
 end
 
-to draw-cell-borders
+to DRAW-CELL-BORDERS
   let row 0
   let column 0
   repeat cell [
     repeat cell [
       ask patch (cell-dimension - 1 + (row * cell-dimension)) (cell-dimension - 1 + (column * cell-dimension)) [
         sprout 1 [
-          set color red
+          set color black
+          set pen-size 5
           set heading 90
-          forward 0.55
+          forward 0.5
           set heading 0
           forward 0.5
           pen-down
           let angle 360
-          repeat 4 [
-            set angle (angle - 90)
-            set heading angle
-            forward cell-dimension
-          ]
-          set heading 225
-          forward 0.1
-          set angle 360
           repeat 4 [
             set angle (angle - 90)
             set heading angle
@@ -234,15 +511,174 @@ to draw-cell-borders
     set row (row + 1)
   ]
 end
+
+to DRAW-INFECTION
+  if infection-radius > 0
+  [
+    let origin (max-pxcor / 2)
+    ask patch origin origin [
+      sprout 1 [
+        ask patches in-radius infection-radius [set pcolor red]
+        die
+      ]
+    ]
+  ]
+end
+
+;-------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+;Drawing obstacles ------------------------------------------------------------------------------------------
+
+to DRAW-CITY
+  let block-dimension (cell-dimension / 8)
+  let row 0
+  let col 0
+  let cell-col 0
+  let cell-row [1 2 5 6]
+  repeat cell [
+    repeat cell [
+      repeat cell-dimension [
+        if ((cell-col mod 2) = 1) [
+          foreach cell-row [x ->
+            ask patch (col * cell-dimension + cell-col * block-dimension) (col * cell-dimension + x * block-dimension) [
+              let i 0
+              let j 0
+              repeat block-dimension [
+                repeat block-dimension [
+                  ask patch-at i j [
+                    set pcolor black
+                  ]
+                  set i (i + 1)
+                ]
+                set i 0
+                set j (j + 1)
+              ]
+            ]
+          ]
+        ]
+        set cell-col (cell-col + 1)
+      ]
+      set cell-col 0
+      set col (col + 1)
+    ]
+    set row (row + 1)
+  ]
+end
+
+;-------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+;observer methods for debugging -------------------------------------------------------------------------------
+
+to CI
+  clear-output
+  output-print (count (humans with [color = yellow]))
+end
+
+to SHOW-COLLIDED
+  if ([pcolor] of patch-here) = black
+  [
+    set collided (collided + 1)
+    clear-output
+    output-print (word "times collided: " collided)
+  ]
+end
+
+to MANUALLY-DRAW-OBJ
+  if mouse-inside? [
+    if mouse-down?
+    [
+      ask patch mouse-xcor mouse-ycor [set pcolor black]
+    ]
+  ]
+end
+
+to SHOW-RESULTS
+  let index 0
+  let words []
+  clear-output
+  ask supermanagers
+  [
+    set words lput (space "cn") words
+    set words lput (space "ti") words
+    set words lput (space "tn") words
+    set words lput (space "un") words
+    set words lput (space "sc") words
+    set words lput (space "rk") words
+    output-print words
+    set words []
+    repeat (cell * cell)
+    [
+      set words lput (space (index + 1)) words
+      set words lput (space (item index TI)) words
+      set words lput (space (item index TN)) words
+      set words lput (space (item index UI)) words
+      set words lput (space (item index SC)) words
+      set words lput (space (item index RANK)) words
+
+      output-print words
+      set words []
+      set index (index + 1)
+    ]
+  ]
+end
+
+to-report space [d]
+  let f ((count turtles) + (cell * cell))
+  set f (length (word f))
+  let add (f - (length (word d)))
+  let s (word d)
+  repeat add [set s (word " " s)]
+  report s
+end
+
+to plot-scores
+  clear-plot
+  let index 1
+  ask supermanagers [
+    foreach SC [ val ->
+      plotxy index val
+      set index (index + 1)
+    ]
+  ]
+end
+
+to show-inf-cells
+  let l []
+  ask patches with [pcolor = red]
+  [
+    if not (member? pid l) [set l lput pid l]
+  ]
+  show sort l
+end
+
+
+
+
 @#$#@#$#@
 GRAPHICS-WINDOW
-343
-36
-705
-399
+351
+10
+845
+505
 -1
 -1
-29.5
+30.0
 1
 10
 1
@@ -253,9 +689,9 @@ GRAPHICS-WINDOW
 1
 1
 0
-11
+8
 0
-11
+8
 0
 0
 1
@@ -263,10 +699,10 @@ ticks
 30.0
 
 BUTTON
-28
-28
-91
-61
+8
+87
+63
+120
 NIL
 setup\n
 NIL
@@ -274,33 +710,33 @@ NIL
 T
 OBSERVER
 NIL
-NIL
+S
 NIL
 NIL
 1
 
 BUTTON
-105
-29
-168
-62
-NIL
+82
+88
+137
+121
 go
+ifelse ticks != 1000\n[go]\n[clear-output\noutput-print \"Simulation done!\"\n]
 T
 1
 T
 OBSERVER
 NIL
-NIL
+G
 NIL
 NIL
 1
 
 SLIDER
-27
-74
-199
-107
+8
+10
+180
+43
 cell
 cell
 1
@@ -312,30 +748,218 @@ NIL
 HORIZONTAL
 
 INPUTBOX
-26
-115
-108
-175
+186
+10
+250
+70
 population
-1.0
+3.0
 1
 0
 Number
 
 SLIDER
-128
-120
-300
-153
-transition
-transition
-1
+8
+46
+180
+79
+immune-system
+immune-system
+0
 10
-10.0
+0.0
 1
 1
 NIL
 HORIZONTAL
+
+INPUTBOX
+256
+10
+341
+70
+infection-radius
+1.0
+1
+0
+Number
+
+OUTPUT
+7
+250
+256
+369
+12
+
+BUTTON
+7
+214
+120
+247
+SHOW-RESULTS (t)
+SHOW-RESULTS
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+MONITOR
+261
+128
+322
+173
+displayed?
+pen
+17
+1
+11
+
+BUTTON
+193
+129
+256
+162
+pen
+ifelse not pen\n[\nask humans [pen-down]\nset pen true\n][\nask humans [pen-up]\nset pen false\n]
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+BUTTON
+250
+87
+321
+120
++1g (space)
+go
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+BUTTON
+155
+87
+235
+120
+DrawObj
+MANUALLY-DRAW-OBJ
+T
+1
+T
+OBSERVER
+NIL
+D
+NIL
+NIL
+1
+
+BUTTON
+8
+126
+91
+159
+turtle-visibility
+ifelse show-turtles\n[\nhide-turtle\nset show-turtles false\n]\n[\nshow-turtle\nset show-turtles true\n]
+NIL
+1
+T
+TURTLE
+NIL
+NIL
+NIL
+NIL
+1
+
+MONITOR
+97
+126
+159
+171
+displayed?
+show-turtles
+17
+1
+11
+
+PLOT
+8
+373
+256
+523
+scores
+cell
+score
+0.0
+1.0
+0.0
+1.0
+true
+false
+"" "clear-plot"
+PENS
+"default" 1.0 1 -16777216 true "plot-scores" "plot-scores"
+
+BUTTON
+9
+172
+92
+205
+draw-patches
+DRAW-BORDERS
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+BUTTON
+161
+182
+257
+215
+link-visibility
+ifelse show-links\n[hide-link\nset show-links false]\n[show-link\nset show-links true]
+NIL
+1
+T
+LINK
+NIL
+NIL
+NIL
+NIL
+1
+
+MONITOR
+262
+182
+333
+227
+displayed?
+show-links
+17
+1
+11
 
 @#$#@#$#@
 ## WHAT IS IT?
